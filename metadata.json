@@ -1,0 +1,7 @@
+{
+  "name": "New and Updated BOM Configurator Pro ",
+  "description": "A comprehensive Bill of Materials (BOM) configurator with dynamic logic, Excel import/export capabilities, and AI-powered MO matching.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
