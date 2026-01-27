@@ -1,42 +1,30 @@
-
 import React, { useState, useMemo, useEffect } from 'react';
 import { GoogleGenAI } from '@google/genai';
-import { MachineKnowledge, LearningEntry, BOMPart, ConfigRule, ConfidenceLevel, TechnicalGlossary } from '../types';
+import { MachineKnowledge, BOMPart, ConfigRule, TechnicalGlossary } from '../types';
 import { 
   GraduationCap, 
-  Play, 
   Loader2, 
   FileText, 
   BrainCircuit, 
   Trash2, 
   Zap, 
-  ShieldCheck, 
-  Database, 
   FlaskConical, 
   FileSpreadsheet, 
-  Upload, 
-  ArrowRight, 
-  CheckCircle2, 
-  AlertCircle, 
   Download, 
   Terminal, 
-  Layers, 
   Search, 
   Activity, 
-  Cpu, 
   RefreshCw, 
-  SearchCode, 
   CheckCircle, 
-  Bug, 
-  Info, 
-  Layers2, 
   Binary, 
   Microchip,
   Timer,
   Clock,
   RotateCcw,
   Save,
-  ChevronRight
+  PlayCircle,
+  PauseCircle,
+  Database
 } from 'lucide-react';
 
 interface Props {
@@ -69,15 +57,30 @@ const NeuralAcademy: React.FC<Props> = ({ knowledgeBase, onKnowledgeBaseUpdate, 
   const [proposals, setProposals] = useState<LogicProposal[]>([]);
   const [resultSearchTerm, setResultSearchTerm] = useState('');
   
-  // Performance Config
+  // Performance & Persistence Config
   const [cooldownRemaining, setCooldownRemaining] = useState(0);
-  const CLUSTER_SIZE = 5; // Process 5 SKUs per single AI request (5x speed)
-  const RPM_LIMIT = 10; // Max requests per minute
+  const CLUSTER_SIZE = 5; 
+  const RPM_LIMIT = 10; 
   const COOLDOWN_SECONDS = 65; 
+  const STORAGE_KEY = 'neural_lab_recovery_v4';
 
-  const STORAGE_KEY = 'bom_synthesis_session_v3';
+  // Load restore point on mount
+  useEffect(() => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (parsed.proposals && parsed.proposals.length > 0) {
+          setProposals(parsed.proposals);
+          addLog(`Restore point located: ${parsed.proposals.length} logic formulas recovered.`, 'success');
+        }
+      } catch (e) {
+        console.warn("Restore point corrupted or empty.");
+      }
+    }
+  }, []);
 
-  // Fix: Added missing filteredProposals memo to resolve compilation error on line 435
+  // Filtered view of results
   const filteredProposals = useMemo(() => {
     return proposals.filter(p => 
       p.partNumber.toLowerCase().includes(resultSearchTerm.toLowerCase()) ||
@@ -85,23 +88,6 @@ const NeuralAcademy: React.FC<Props> = ({ knowledgeBase, onKnowledgeBaseUpdate, 
       p.proposedExpression.toLowerCase().includes(resultSearchTerm.toLowerCase())
     );
   }, [proposals, resultSearchTerm]);
-
-  useEffect(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (parsed.proposals) setProposals(parsed.proposals);
-        addLog(`Restore point: ${parsed.proposals.length} SKUs pre-loaded. Ready to resume.`, 'info');
-      } catch (e) { console.error(e); }
-    }
-  }, []);
-
-  useEffect(() => {
-    if (proposals.length > 0) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ proposals, timestamp: new Date().toISOString() }));
-    }
-  }, [proposals]);
 
   useEffect(() => {
     let timer: number;
@@ -122,14 +108,14 @@ const NeuralAcademy: React.FC<Props> = ({ knowledgeBase, onKnowledgeBaseUpdate, 
     try {
       const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
       return JSON.parse(cleanJson);
-    } catch (e) { return {}; }
+    } catch (e) { return null; }
   };
 
   const clearSession = () => {
-    if (confirm("Reset current laboratory session?")) {
+    if (confirm("This will purge all synthesized results and the current restore point. Proceed?")) {
       localStorage.removeItem(STORAGE_KEY);
       setProposals([]);
-      addLog("Laboratory reset. All volatile restore points purged.", 'warn');
+      addLog("Lab environment sanitized. Session cleared.", 'warn');
     }
   };
 
@@ -161,21 +147,20 @@ const NeuralAcademy: React.FC<Props> = ({ knowledgeBase, onKnowledgeBaseUpdate, 
   };
 
   const startLogicSynthesis = async () => {
-    // Fix: Using exclusively process.env.API_KEY as per guidelines
-    const key = process.env.API_KEY;
-    if (!key) return addLog("API Key Missing in execution environment.", 'error');
-    if (moFiles.length === 0 || milFiles.length === 0) return addLog("Upload MIL and MO files first.", 'warn');
+    const key = apiKey || process.env.API_KEY;
+    if (!key) return addLog("API Key Missing. Check System Config.", 'error');
+    if (moFiles.length === 0 || milFiles.length === 0) return addLog("Missing datasets: Upload MIL and MO files.", 'warn');
 
     setIsTraining(true);
     try {
+      addLog("Indexing Master Item List...", 'info');
       let milData: any[] = [];
       for (const file of milFiles) { milData = [...milData, ...await parseMilExcel(file)]; }
 
-      // Fix: Correct initialization with named parameter
       const ai = new GoogleGenAI({ apiKey: key });
       const moDetails: any[] = [];
 
-      addLog(`Phase 1: Ingesting Factory Orders...`, 'info');
+      addLog(`Phase 1: Ingesting Factory Orders (${moFiles.length})...`, 'info');
       for (const file of moFiles) {
         const base64 = await new Promise<string>(res => {
           const r = new FileReader();
@@ -185,18 +170,18 @@ const NeuralAcademy: React.FC<Props> = ({ knowledgeBase, onKnowledgeBaseUpdate, 
 
         const resp = await ai.models.generateContent({
           model: 'gemini-3-flash-preview',
-          contents: { parts: [{ text: "Extract MO Number and Configuration Options Table (Name/Option). JSON: {\"moNumber\": \"string\", \"options\": [{\"name\": \"string\", \"option\": \"string\"}]}" }, { inlineData: { mimeType: file.type, data: base64 } }] },
+          contents: { parts: [{ text: "Extract MO Number and Options Table. JSON: {\"moNumber\": \"string\", \"options\": [{\"name\": \"string\", \"option\": \"string\"}]}" }, { inlineData: { mimeType: file.type, data: base64 } }] },
           config: { responseMimeType: "application/json" }
         });
 
         const data = safeJsonParse(resp.text || '{}');
-        if (data.moNumber) {
+        if (data?.moNumber) {
           moDetails.push({ moNumber: data.moNumber, normMo: normalizeId(data.moNumber), specs: data.options || [] });
-          addLog(`Order #${data.moNumber} indexed.`, 'success');
+          addLog(`Order #${data.moNumber} identified.`, 'success');
         }
       }
 
-      addLog(`Phase 2: Semantic Correlation...`, 'info');
+      addLog(`Phase 2: Semantic Correlation Mapping...`, 'info');
       const skuContexts: Record<string, any> = {}; 
       moDetails.forEach(mo => {
         const linkedRows = milData.filter(row => row.norm_mo === mo.normMo);
@@ -214,24 +199,21 @@ const NeuralAcademy: React.FC<Props> = ({ knowledgeBase, onKnowledgeBaseUpdate, 
       const skusToProcess = allSkus.filter(s => !currentProcessed.has(s));
 
       if (skusToProcess.length === 0) {
-        addLog("Synthesis already complete for detected scope.", 'success');
+        addLog("Delta Check: All detected SKUs already synthesized.", 'success');
+        setIsTraining(false);
         return;
       }
 
-      addLog(`Phase 3: High-Speed Synthesis (${skusToProcess.length} SKUs / 5 per call)...`, 'info');
+      addLog(`Phase 3: High-Speed Neural Synthesis. Cluster Size: ${CLUSTER_SIZE}`, 'info');
 
-      // Cluster Processing
       for (let i = 0; i < skusToProcess.length; i += CLUSTER_SIZE) {
         if (i > 0 && (i / CLUSTER_SIZE) % RPM_LIMIT === 0) {
-          addLog(`Quota cycle limit reached. Cooldown for ${COOLDOWN_SECONDS}s...`, 'warn');
+          addLog(`API Pacing: Cooling down to reset RPM quota...`, 'warn');
           setCooldownRemaining(COOLDOWN_SECONDS);
           await delay(COOLDOWN_SECONDS * 1000);
         }
 
         const cluster = skusToProcess.slice(i, i + CLUSTER_SIZE);
-        addLog(`Synthesizing Cluster: ${cluster.join(', ')}`, 'info');
-
-        // Dynamic Glossary Pruning for token efficiency
         const clusterRemarks = cluster.map(pn => skuContexts[pn].milEntry.remarks).join(' ');
         const prunedGlossary = Object.entries(glossary)
           .filter(([abbr]) => clusterRemarks.includes(abbr))
@@ -239,62 +221,72 @@ const NeuralAcademy: React.FC<Props> = ({ knowledgeBase, onKnowledgeBaseUpdate, 
 
         const clusterPrompt = cluster.map(pn => {
           const { contexts, mos, milEntry } = skuContexts[pn];
-          return `PART: ${pn}\nREMARKS: ${milEntry.remarks}\nEVIDENCE:\n${contexts.slice(0,10).map((c:any, j:number) => `[MO ${mos[j]}] ${c}`).join('\n')}`;
+          return `PART: ${pn}\nREMARKS: ${milEntry.remarks}\nEVIDENCE:\n${contexts.slice(0,8).map((c:any, j:number) => `[MO ${mos[j]}] ${c}`).join('\n')}`;
         }).join('\n\n---\n\n');
 
-        try {
-          const resp = await ai.models.generateContent({
-            model: 'gemini-3-flash-preview',
-            contents: `
-              TASK: Generate engineering logic formulas for these parts.
-              DICTIONARY: ${prunedGlossary}
-              INPUTS:
-              ${clusterPrompt}
-              
-              RETURN JSON ARRAY: [{"partNumber": "string", "expression": "(INCLUDES) [EXCLUDES]", "confidence": number, "reasoning": "string", "indicators": ["string"]}]
-            `,
-            config: { responseMimeType: "application/json" }
-          });
+        let retryCount = 0;
+        let clusterSuccess = false;
 
-          const batchProposals = safeJsonParse(resp.text || '[]');
-          if (Array.isArray(batchProposals)) {
-            const mapped = batchProposals.map(bp => ({
-              partNumber: bp.partNumber,
-              partName: parts.find(p => normalizeId(p.Part_Number) === normalizeId(bp.partNumber))?.Name || 'Unknown Component',
-              proposedExpression: bp.expression || '(N/A)',
-              evidenceCount: skuContexts[bp.partNumber]?.mos.length || 0,
-              confidence: bp.confidence || 0.5,
-              reasoning: bp.reasoning || "Neural cluster analysis.",
-              matchedMOs: Array.from(new Set(skuContexts[bp.partNumber]?.mos || [])),
-              keyIndicators: bp.indicators || []
-            }));
-            
-            setProposals(prev => [...prev, ...mapped]);
-            addLog(`Cluster success. Processed ${i + mapped.length}/${skusToProcess.length}`, 'success');
-          }
-          await delay(2000); // Inter-request pacing
-        } catch (e: any) {
-          if (e.message?.includes('429')) {
-             addLog("Rate limit surge. 30s pause.", 'warn');
-             await delay(30000);
-             i -= CLUSTER_SIZE; // Retry cluster
+        while (!clusterSuccess && retryCount < 2) {
+          try {
+            const resp = await ai.models.generateContent({
+              model: 'gemini-3-flash-preview',
+              contents: `
+                ACT AS AN ENGINEERING LOGIC ENGINE. 
+                FOR EACH PART BELOW, SYNTHESIZE A TRIGGER FORMULA.
+                DICTIONARY: ${prunedGlossary}
+                INPUTS:
+                ${clusterPrompt}
+                
+                RETURN JSON ARRAY: [{"partNumber": "string", "expression": "(INCLUDES) [EXCLUDES]", "confidence": number, "reasoning": "string", "indicators": ["string"]}]
+              `,
+              config: { responseMimeType: "application/json" }
+            });
+
+            const batchResults = safeJsonParse(resp.text || '[]');
+            if (Array.isArray(batchResults)) {
+              const mappedResults = batchResults.map(bp => ({
+                partNumber: bp.partNumber,
+                partName: parts.find(p => normalizeId(p.Part_Number) === normalizeId(bp.partNumber))?.Name || 'Unknown Component',
+                proposedExpression: bp.expression || '(N/A)',
+                evidenceCount: skuContexts[bp.partNumber]?.mos.length || 0,
+                confidence: bp.confidence || 0.5,
+                reasoning: bp.reasoning || "Neural Deduction.",
+                matchedMOs: Array.from(new Set(skuContexts[bp.partNumber]?.mos || [])),
+                keyIndicators: bp.indicators || []
+              }));
+              
+              // Real-time Update & Persistence
+              setProposals(prev => {
+                const next = [...prev, ...mappedResults];
+                localStorage.setItem(STORAGE_KEY, JSON.stringify({ proposals: next, timestamp: new Date().toISOString() }));
+                return next;
+              });
+
+              addLog(`Cluster Ready: ${mappedResults.length} formulas live.`, 'success');
+              clusterSuccess = true;
+            }
+          } catch (e: any) {
+            if (e.message?.includes('429')) {
+               addLog("Rate Limit Encountered. Automatic 30s Pacing.", 'warn');
+               setCooldownRemaining(30);
+               await delay(30000);
+               retryCount++;
+            } else {
+               addLog(`AI Exception: ${e.message}`, 'error');
+               break;
+            }
           }
         }
+        await delay(1500); 
       }
-      addLog(`Synthesis Laboratory Operations Concluded.`, 'success');
+      addLog(`Synthesis Laboratory Operations Complete.`, 'success');
     } catch (e: any) {
-      addLog(`Error: ${e.message}`, 'error');
+      addLog(`Fatal Error: ${e.message}`, 'error');
     } finally {
       setIsTraining(false);
       setCooldownRemaining(0);
     }
-  };
-
-  const startTraining = async () => {
-    setIsTraining(true);
-    addLog("Updating knowledge weights...", 'info');
-    // Simulated training
-    setIsTraining(false);
   };
 
   const deployLogic = () => {
@@ -310,22 +302,23 @@ const NeuralAcademy: React.FC<Props> = ({ knowledgeBase, onKnowledgeBaseUpdate, 
     onRulesUpdate(newRules);
     localStorage.removeItem(STORAGE_KEY);
     setProposals([]);
-    alert("Logic successfully integrated into engineering base.");
+    alert(`Success: Integrated ${proposals.length} synthesized rules into the master configuration engine.`);
   };
 
   const exportToExcel = () => {
+    if (proposals.length === 0) return;
     const data = proposals.map(p => ({
-      "PN": p.partNumber,
-      "Name": p.partName,
-      "Logic": p.proposedExpression,
-      "Confidence": `${Math.round(p.confidence * 100)}%`,
-      "Hits": p.evidenceCount,
-      "Reasoning": p.reasoning
+      "SKU": p.partNumber,
+      "Description": p.partName,
+      "Logic Formula": p.proposedExpression,
+      "Match Score": `${Math.round(p.confidence * 100)}%`,
+      "Source Orders": p.evidenceCount,
+      "Analysis": p.reasoning
     }));
     const wb = (window as any).XLSX.utils.book_new();
     const ws = (window as any).XLSX.utils.json_to_sheet(data);
-    (window as any).XLSX.utils.book_append_sheet(wb, ws, "Neural Synthesis");
-    (window as any).XLSX.writeFile(wb, `BOM_Logic_${new Date().toISOString().slice(0,10)}.xlsx`);
+    (window as any).XLSX.utils.book_append_sheet(wb, ws, "Neural Synthesis Report");
+    (window as any).XLSX.writeFile(wb, `Engineering_Synthesis_${new Date().toISOString().slice(0,10)}.xlsx`);
   };
 
   return (
@@ -338,20 +331,20 @@ const NeuralAcademy: React.FC<Props> = ({ knowledgeBase, onKnowledgeBaseUpdate, 
           <div>
             <h2 className="text-3xl font-black text-slate-800 tracking-tighter uppercase leading-none">Neural Academy</h2>
             <div className="flex items-center gap-4 mt-3">
-               <button onClick={() => setActiveMode('logic-synthesis')} className={`text-[10px] font-black uppercase tracking-widest pb-1 border-b-2 transition-all ${activeMode === 'logic-synthesis' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-400'}`}>High Speed Logic Synthesis</button>
+               <button onClick={() => setActiveMode('logic-synthesis')} className={`text-[10px] font-black uppercase tracking-widest pb-1 border-b-2 transition-all ${activeMode === 'logic-synthesis' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-400'}`}>Logic Synthesis Lab</button>
                <button onClick={() => setActiveMode('weights')} className={`text-[10px] font-black uppercase tracking-widest pb-1 border-b-2 transition-all ${activeMode === 'weights' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-400'}`}>Neural Pattern Training</button>
             </div>
           </div>
         </div>
         <div className="flex gap-8">
            <div className="text-right">
-              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Master Database</p>
-              <p className="text-2xl font-black text-slate-800 leading-none mt-1">{parts.length} SKU Items</p>
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Master Base</p>
+              <p className="text-2xl font-black text-slate-800 leading-none mt-1">{parts.length} Items</p>
            </div>
            {proposals.length > 0 && (
              <div className="text-right border-l pl-8 border-slate-100">
-                <p className="text-[10px] font-black text-indigo-500 uppercase tracking-widest">Logic Discoveries</p>
-                <p className="text-2xl font-black text-indigo-600 leading-none mt-1">{proposals.length} Valid Formulas</p>
+                <p className="text-[10px] font-black text-indigo-500 uppercase tracking-widest">Logic Stream</p>
+                <p className="text-2xl font-black text-indigo-600 leading-none mt-1">{proposals.length} Formulas</p>
              </div>
            )}
         </div>
@@ -362,10 +355,10 @@ const NeuralAcademy: React.FC<Props> = ({ knowledgeBase, onKnowledgeBaseUpdate, 
           <div className="bg-white rounded-[2.5rem] border p-8 shadow-sm space-y-6 sticky top-0">
             <div className="flex justify-between items-center">
               <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] flex items-center gap-2">
-                <FlaskConical size={14} className="text-indigo-500" /> Lab Configuration
+                <FlaskConical size={14} className="text-indigo-500" /> Control Desk
               </h3>
               {proposals.length > 0 && (
-                <button onClick={clearSession} className="text-red-500 hover:text-red-600 transition-colors" title="Reset Session">
+                <button onClick={clearSession} className="text-red-500 hover:text-red-600 transition-colors p-2 hover:bg-red-50 rounded-lg" title="Reset Session">
                   <RotateCcw size={14} />
                 </button>
               )}
@@ -375,26 +368,27 @@ const NeuralAcademy: React.FC<Props> = ({ knowledgeBase, onKnowledgeBaseUpdate, 
               <div className="group bg-slate-50 border-2 border-dashed border-slate-200 rounded-3xl p-6 flex flex-col items-center justify-center relative cursor-pointer hover:border-indigo-400 hover:bg-indigo-50/30 transition-all">
                 <input type="file" multiple onChange={e => setMilFiles(Array.from(e.target.files || []))} className="absolute inset-0 opacity-0 cursor-pointer z-10" />
                 <FileSpreadsheet className={milFiles.length > 0 ? "text-indigo-600" : "text-slate-300"} size={32} />
-                <span className="text-[10px] font-black text-slate-400 mt-3 uppercase text-center">{milFiles.length > 0 ? `${milFiles.length} MIL Files Indexed` : 'Upload MIL Excel (Ground Truth)'}</span>
+                <span className="text-[10px] font-black text-slate-400 mt-3 uppercase text-center">{milFiles.length > 0 ? `${milFiles.length} MIL Files Ready` : 'Upload MIL Ground Truth'}</span>
               </div>
 
               <div className="group bg-slate-50 border-2 border-dashed border-slate-200 rounded-3xl p-6 flex flex-col items-center justify-center relative cursor-pointer hover:border-indigo-400 hover:bg-indigo-50/30 transition-all">
                 <input type="file" multiple onChange={e => setMoFiles(Array.from(e.target.files || []))} className="absolute inset-0 opacity-0 cursor-pointer z-10" />
                 <FileText className={moFiles.length > 0 ? "text-indigo-600" : "text-slate-300"} size={32} />
-                <span className="text-[10px] font-black text-slate-400 mt-3 uppercase text-center">{moFiles.length > 0 ? `${moFiles.length} Order Files Loaded` : 'Upload MO Summaries (PDF)'}</span>
+                <span className="text-[10px] font-black text-slate-400 mt-3 uppercase text-center">{moFiles.length > 0 ? `${moFiles.length} Factory Orders Loaded` : 'Upload Factory Orders'}</span>
               </div>
 
-              <div className="space-y-2">
+              <div className="pt-4 space-y-3">
                  <div className="flex justify-between text-[8px] font-black text-slate-400 uppercase tracking-widest px-2">
-                    <span>Performance Mode</span>
-                    <span className="flex items-center gap-1 text-emerald-500"><Save size={8} /> Multi-SKU Cluster (5x)</span>
+                    <span>Cluster Sync</span>
+                    <span className="flex items-center gap-1 text-emerald-500 font-bold"><Save size={8} /> Auto-Saving Every Logic</span>
                  </div>
                  <button 
                   onClick={startLogicSynthesis} 
                   disabled={isTraining || cooldownRemaining > 0} 
                   className={`w-full py-5 rounded-2xl flex items-center justify-center gap-3 text-xs font-black uppercase transition-all shadow-xl active:scale-95 ${isTraining || cooldownRemaining > 0 ? 'bg-slate-100 text-slate-400' : 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-indigo-100'}`}
                 >
-                  {isTraining ? <Loader2 size={18} className="animate-spin" /> : cooldownRemaining > 0 ? <Clock size={18} /> : proposals.length > 0 ? 'Continue Synthesis' : 'Start Synthesis'}
+                  {isTraining ? <Loader2 size={18} className="animate-spin" /> : cooldownRemaining > 0 ? <Clock size={18} /> : proposals.length > 0 ? <PlayCircle size={18} /> : <Zap size={18} />}
+                  {isTraining ? 'Processing Clusters...' : cooldownRemaining > 0 ? `Quota Reset (${cooldownRemaining}s)` : proposals.length > 0 ? 'Resume Synthesis' : 'Begin Synthesis Engine'}
                 </button>
               </div>
             </div>
@@ -402,16 +396,17 @@ const NeuralAcademy: React.FC<Props> = ({ knowledgeBase, onKnowledgeBaseUpdate, 
 
           <div className="bg-slate-900 rounded-[2.5rem] p-6 text-white shadow-2xl h-80 border border-white/5 flex flex-col">
              <div className="flex justify-between items-center mb-4 border-b border-white/10 pb-3">
-               <h3 className="text-[10px] font-black text-indigo-400 uppercase tracking-widest flex items-center gap-2"><Terminal size={12} /> Live Lab Feed</h3>
+               <h3 className="text-[10px] font-black text-indigo-400 uppercase tracking-widest flex items-center gap-2"><Terminal size={12} /> Neural Stream Feed</h3>
                <button onClick={() => setTrainingLog([])} className="text-slate-500 hover:text-white transition-colors"><Trash2 size={14} /></button>
              </div>
              <div className="flex-1 overflow-auto font-mono text-[9px] space-y-2 scrollbar-hide">
                 {cooldownRemaining > 0 && (
                    <div className="bg-indigo-500/20 p-3 rounded-xl border border-indigo-500/30 flex items-center gap-3 text-indigo-300 mb-4 animate-pulse">
                       <Timer size={14} />
-                      <span className="font-bold uppercase tracking-tight">API COOLING: {cooldownRemaining}s REMAINING</span>
+                      <span className="font-bold uppercase tracking-tight">LATENCY COOLING: {cooldownRemaining}s</span>
                    </div>
                 )}
+                {trainingLog.length === 0 && <p className="text-slate-700 italic">Engine idling. Upload data to begin...</p>}
                 {trainingLog.map((l, i) => (
                   <div key={i} className={`flex gap-3 leading-relaxed ${l.type === 'error' ? 'text-red-400' : l.type === 'success' ? 'text-emerald-400' : l.type === 'warn' ? 'text-amber-400' : 'text-indigo-200/80'}`}>
                     <span className="opacity-30">[{new Date().toLocaleTimeString()}]</span>
@@ -429,17 +424,17 @@ const NeuralAcademy: React.FC<Props> = ({ knowledgeBase, onKnowledgeBaseUpdate, 
                    <div className="flex items-center gap-4">
                       <div className="w-12 h-12 bg-indigo-50 rounded-2xl flex items-center justify-center text-indigo-600 shadow-inner"><Activity size={24} /></div>
                       <div>
-                        <h3 className="text-2xl font-black text-slate-800 uppercase tracking-tighter leading-none">Synthesized Formulas</h3>
-                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mt-1">Found Logic for {proposals.length} SKUs</p>
+                        <h3 className="text-2xl font-black text-slate-800 uppercase tracking-tighter leading-none">Synthesized Findings</h3>
+                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mt-1">Incremental State Persistence Active</p>
                       </div>
                    </div>
                    <div className="flex gap-2">
                       <div className="relative mr-2">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-300" size={14} />
-                        <input type="text" placeholder="Filter discovered..." value={resultSearchTerm} onChange={(e) => setResultSearchTerm(e.target.value)} className="pl-9 pr-4 py-2 text-[10px] font-black uppercase bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500/10 transition-all w-48" />
+                        <input type="text" placeholder="Filter discovered SKU..." value={resultSearchTerm} onChange={(e) => setResultSearchTerm(e.target.value)} className="pl-9 pr-4 py-2 text-[10px] font-black uppercase bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500/10 transition-all w-48" />
                       </div>
                       <button onClick={exportToExcel} title="Export Findings" className="p-3 bg-white border border-slate-200 rounded-xl text-slate-600 hover:bg-slate-50 transition-all shadow-sm"><Download size={18} /></button>
-                      <button onClick={deployLogic} className="px-8 py-3 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-black uppercase rounded-xl shadow-lg transition-all active:scale-95">Integrate to System</button>
+                      <button onClick={deployLogic} className="px-8 py-3 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-black uppercase rounded-xl shadow-lg transition-all active:scale-95">Deploy to Engine</button>
                    </div>
                 </div>
                 
@@ -448,11 +443,11 @@ const NeuralAcademy: React.FC<Props> = ({ knowledgeBase, onKnowledgeBaseUpdate, 
                       <div key={p.partNumber} className="p-8 border-2 rounded-[2.5rem] bg-white hover:border-indigo-400 transition-all flex flex-col gap-6 shadow-sm group animate-in slide-in-from-right-4">
                          <div className="flex justify-between items-start">
                             <div className="space-y-1">
-                               <p className="text-[10px] font-black text-indigo-600 uppercase tracking-widest font-mono">SKU ID: {p.partNumber}</p>
+                               <p className="text-[10px] font-black text-indigo-600 uppercase tracking-widest font-mono">PN: {p.partNumber}</p>
                                <h4 className="text-lg font-black text-slate-800 tracking-tight uppercase leading-none">{p.partName}</h4>
                             </div>
                             <div className={`px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-widest flex items-center gap-2 border shadow-sm ${p.confidence > 0.8 ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-amber-50 text-amber-700 border-amber-100'}`}>
-                               <CheckCircle size={12} /> {Math.round(p.confidence * 100)}% Pattern Match
+                               <CheckCircle size={12} /> {Math.round(p.confidence * 100)}% Match
                             </div>
                          </div>
                          
@@ -463,8 +458,8 @@ const NeuralAcademy: React.FC<Props> = ({ knowledgeBase, onKnowledgeBaseUpdate, 
                               <code className="text-white font-mono font-black text-lg sm:text-2xl tracking-tighter">{p.proposedExpression}</code>
                             </div>
                             <div className="text-right relative z-10">
-                              <span className="text-[10px] font-black text-slate-500 uppercase block tracking-widest">Statistical Pool</span>
-                              <span className="text-xl font-black text-indigo-400 uppercase">{p.evidenceCount} Orders Matched</span>
+                              <span className="text-[10px] font-black text-slate-500 uppercase block tracking-widest">Evidence Base</span>
+                              <span className="text-xl font-black text-indigo-400 uppercase">{p.evidenceCount} Orders Found</span>
                             </div>
                          </div>
 
@@ -478,7 +473,7 @@ const NeuralAcademy: React.FC<Props> = ({ knowledgeBase, onKnowledgeBaseUpdate, 
                              <BrainCircuit size={18} className="text-indigo-400 mt-1 shrink-0" />
                              <div>
                                <p className="text-[10px] text-slate-600 font-bold uppercase tracking-tight italic leading-relaxed">
-                                 <span className="text-indigo-600 font-black mr-2 not-italic">Neural Deduction:</span> {p.reasoning}
+                                 <span className="text-indigo-600 font-black mr-2 not-italic">Neural Insight:</span> {p.reasoning}
                                </p>
                              </div>
                            </div>
@@ -494,10 +489,14 @@ const NeuralAcademy: React.FC<Props> = ({ knowledgeBase, onKnowledgeBaseUpdate, 
                   <div className="w-24 h-24 bg-white rounded-full flex items-center justify-center border shadow-inner mb-8 transition-transform hover:scale-110 group">
                     <FlaskConical size={48} className="text-slate-200 group-hover:text-indigo-300 transition-colors" />
                   </div>
-                  <h4 className="text-xs font-black uppercase tracking-[0.5em] text-slate-400">High-Speed Discovery Offline</h4>
+                  <h4 className="text-xs font-black uppercase tracking-[0.5em] text-slate-400">Lab Offline</h4>
                   <p className="text-[10px] font-bold text-slate-400 mt-4 max-w-sm uppercase leading-relaxed tracking-wider">
-                    Upload MIL and Factory Orders to synthesize logic cluster-by-cluster. Speed improved by 500% with Multi-SKU Neural Vectoring.
+                    Upload your engineering datasets to begin logic synthesis. The engine will process 5 SKUs per batch and save progress incrementally.
                   </p>
+                  <div className="mt-12 flex gap-4">
+                    <div className="px-6 py-2 bg-slate-50 border rounded-2xl text-[9px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 shadow-sm"><Database size={12} /> Persistence Active</div>
+                    <div className="px-6 py-2 bg-slate-50 border rounded-2xl text-[9px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 shadow-sm"><RefreshCw size={12} /> Session Recovery</div>
+                  </div>
                 </div>
              </div>
            )}
