@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { BOMPart, ConfigRule, AppScreen, MachineKnowledge, TechnicalGlossary } from './types';
 import BOMTable from './components/BOMTable';
@@ -26,6 +27,7 @@ const App: React.FC = () => {
   const [parts, setParts] = useState<BOMPart[]>([]);
   const [rules, setRules] = useState<ConfigRule[]>([]);
   const [selectedPartIds, setSelectedPartIds] = useState<Set<string>>(new Set());
+  const [moSelectedIds, setMoSelectedIds] = useState<Set<string>>(new Set());
   const [knowledgeBase, setKnowledgeBase] = useState<MachineKnowledge>({});
   const [glossary, setGlossary] = useState<TechnicalGlossary>(DEFAULT_GLOSSARY);
   const [currentMOModel, setCurrentMOModel] = useState<string>('Generic');
@@ -38,12 +40,14 @@ const App: React.FC = () => {
       const savedParts = localStorage.getItem('bom_parts');
       const savedRules = localStorage.getItem('bom_rules');
       const savedSelections = localStorage.getItem('bom_selections');
+      const savedMoSelections = localStorage.getItem('mo_selections');
       const savedKB = localStorage.getItem('bom_knowledge_base');
       const savedGlossary = localStorage.getItem('bom_glossary');
       
       if (savedParts) setParts(JSON.parse(savedParts));
       if (savedRules) setRules(JSON.parse(savedRules));
       if (savedSelections) setSelectedPartIds(new Set(JSON.parse(savedSelections)));
+      if (savedMoSelections) setMoSelectedIds(new Set(JSON.parse(savedMoSelections)));
       if (savedKB) setKnowledgeBase(JSON.parse(savedKB));
       if (savedGlossary) setGlossary(JSON.parse(savedGlossary));
     } catch (e) {
@@ -119,18 +123,13 @@ const App: React.FC = () => {
     reader.onload = (evt) => {
       try {
         const imported = JSON.parse(evt.target?.result as string);
-        
-        // Handle both full brain exports and individual model weights
         const newKB = imported.knowledgeBase || (imported.modelName ? imported.knowledgeBase : imported);
         const newGlossary = imported.glossary || glossary;
-
         const updatedKB = { ...knowledgeBase, ...newKB };
         setKnowledgeBase(updatedKB);
         setGlossary(newGlossary);
-        
         persist('bom_knowledge_base', updatedKB);
         persist('bom_glossary', newGlossary);
-        
         alert(`Successfully imported ${imported.modelName ? `weights for [${imported.modelName}]` : 'entire brain network'}.`);
       } catch (e) {
         alert("Invalid Intelligence File Schema.");
@@ -171,13 +170,16 @@ const App: React.FC = () => {
         return (
           <MOProvision 
             parts={parts} 
+            rules={rules}
             knowledgeBase={knowledgeBase}
             glossary={glossary}
             apiKey={apiKey}
             onModelDetected={setCurrentMOModel}
             onAutoSelect={(newIds) => {
+              setMoSelectedIds(newIds);
               const updated = new Set([...selectedPartIds, ...Array.from(newIds)]);
               setSelectedPartIds(updated);
+              persist('mo_selections', Array.from(newIds));
               persist('bom_selections', Array.from(updated));
             }} 
             onNavigateToSelection={() => setActiveScreen(AppScreen.SELECTION)}
@@ -196,7 +198,14 @@ const App: React.FC = () => {
           />
         );
       case AppScreen.SELECTION:
-        return <SelectionScreen parts={parts} rules={rules} selectedIds={selectedPartIds} onSelectionChange={ids => { setSelectedPartIds(ids); persist('bom_selections', Array.from(ids)); }} onGenerate={() => setActiveScreen(AppScreen.BOM_GENERATED)} />;
+        return <SelectionScreen 
+          parts={parts} 
+          rules={rules} 
+          selectedIds={selectedPartIds} 
+          moSelectedIds={moSelectedIds}
+          onSelectionChange={ids => { setSelectedPartIds(ids); persist('bom_selections', Array.from(ids)); }} 
+          onGenerate={() => setActiveScreen(AppScreen.BOM_GENERATED)} 
+        />;
       case AppScreen.BOM_GENERATED:
         return <BOMGenerated parts={parts} selectedIds={selectedPartIds} modelName={currentMOModel} onFinalizeKnowledge={onFinalizeAndLearn} />;
       default:
