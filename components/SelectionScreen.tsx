@@ -1,5 +1,5 @@
 
-import React, { useMemo, useCallback, useState } from 'react';
+import React, { useMemo, useCallback, useState, useEffect } from 'react';
 import { BOMPart, ConfigRule } from '../types';
 import { 
   CheckSquare, 
@@ -12,8 +12,7 @@ import {
   Zap,
   Star,
   Award,
-  AlertCircle,
-  PackageCheck
+  AlertCircle
 } from 'lucide-react';
 
 interface Props {
@@ -29,10 +28,10 @@ const SelectionScreen: React.FC<Props> = ({ parts, rules, selectedIds, moSelecte
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
-  // Requirement: F_Code 1, 2, and 9 are configurable. F_Code 0 is mandatory and not shown for selection.
+  // F_Code 1, 2, and 9 are treated as configurable items
   const configParts = useMemo(() => parts.filter(p => p.F_Code === 1 || p.F_Code === 2 || p.F_Code === 9), [parts]);
 
-  // Logic Solver (Priority 2)
+  // Priority 2: Logic Solver
   const logicSelectedIds = useMemo(() => {
     const currentLogicSelected = new Set<string>();
     let changed = true;
@@ -98,30 +97,55 @@ const SelectionScreen: React.FC<Props> = ({ parts, rules, selectedIds, moSelecte
     });
   }, [configParts, searchTerm]);
 
-  // Validation: Each group with F2 parts MUST have exactly one selection
+  // Validation: Check if every F2 group has exactly one selection
   const validation = useMemo(() => {
     let missingF2 = 0;
     let totalF2Groups = 0;
-    const missingGroupNames: string[] = [];
+    const f2Status: Record<string, boolean> = {};
 
     groupedParts.forEach(([group, items]) => {
-      const containsF2 = items.some(p => p.F_Code === 2);
-      if (containsF2) {
+      const isF2 = items.some(p => p.F_Code === 2);
+      if (isF2) {
         totalF2Groups++;
         const hasSelection = items.some(p => selectedIds.has(p.id) || moSelectedIds.has(p.id));
-        if (!hasSelection) {
-          missingF2++;
-          missingGroupNames.push(group);
-        }
+        f2Status[group] = hasSelection;
+        if (!hasSelection) missingF2++;
       }
     });
 
     return { 
       isValid: missingF2 === 0, 
       progress: totalF2Groups > 0 ? Math.round(((totalF2Groups - missingF2) / totalF2Groups) * 100) : 100,
-      missingGroupNames
+      missingGroups: Object.keys(f2Status).filter(g => !f2Status[g])
     };
   }, [groupedParts, selectedIds, moSelectedIds]);
+
+  const handleApplyAllSuggestions = () => {
+    const nextSet = new Set(selectedIds);
+    // Priority 1: MO Engine
+    moSelectedIds.forEach(id => {
+      const part = parts.find(p => p.id === id);
+      if (part && part.F_Code === 2) {
+        // Enforce F2 single choice for P1 items
+        const group = groupedParts.find(([k]) => k === (part.Ref_des || 'General'))?.[1] || [];
+        group.forEach(p => nextSet.delete(p.id));
+      }
+      nextSet.add(id);
+    });
+    // Priority 2: Logic (only if not conflicting with already set P1/User picks)
+    logicSelectedIds.forEach(id => {
+      const part = parts.find(p => p.id === id);
+      if (part && part.F_Code === 2) {
+        const key = part.Ref_des || 'General';
+        const groupItems = groupedParts.find(([k]) => k === key)?.[1] || [];
+        const hasPick = groupItems.some(p => nextSet.has(p.id));
+        if (!hasPick) nextSet.add(id);
+      } else {
+        nextSet.add(id);
+      }
+    });
+    onSelectionChange(nextSet);
+  };
 
   const toggleSelection = useCallback((part: BOMPart) => {
     const next = new Set(selectedIds);
@@ -129,41 +153,17 @@ const SelectionScreen: React.FC<Props> = ({ parts, rules, selectedIds, moSelecte
     if (next.has(part.id)) {
       next.delete(part.id);
     } else {
-      // REQUIREMENT: F_Code 2 is strict single-choice per Ref_des.
+      // F_Code 2: Strict Single Choice per Ref Des
       if (part.F_Code === 2) {
         const key = part.Ref_des || 'General';
-        const groupItems = groupedParts.find(([k]) => k === key)?.[1] || [];
-        groupItems.forEach(p => next.delete(p.id));
+        const group = groupedParts.find(([k]) => k === key)?.[1] || [];
+        group.forEach(p => next.delete(p.id));
       }
+      // F_Code 1: Multi-selection allowed (default behavior)
       next.add(part.id);
     }
     onSelectionChange(next);
   }, [selectedIds, groupedParts, onSelectionChange]);
-
-  const handleApplyAllSuggestions = () => {
-    const next = new Set(selectedIds);
-    // Apply MO (P1)
-    moSelectedIds.forEach(id => {
-      const p = parts.find(x => x.id === id);
-      if (p && p.F_Code === 2) {
-        const group = groupedParts.find(([k]) => k === (p.Ref_des || 'General'))?.[1] || [];
-        group.forEach(i => next.delete(i.id));
-      }
-      next.add(id);
-    });
-    // Apply Logic (P2)
-    logicSelectedIds.forEach(id => {
-      const p = parts.find(x => x.id === id);
-      if (p && p.F_Code === 2) {
-        const key = p.Ref_des || 'General';
-        const group = groupedParts.find(([k]) => k === key)?.[1] || [];
-        if (!group.some(i => next.has(i.id))) next.add(id);
-      } else {
-        next.add(id);
-      }
-    });
-    onSelectionChange(next);
-  };
 
   return (
     <div className="flex flex-col h-full bg-slate-50">
@@ -174,24 +174,34 @@ const SelectionScreen: React.FC<Props> = ({ parts, rules, selectedIds, moSelecte
               <div className="p-2 bg-indigo-600 text-white rounded-xl shadow-lg">
                 <CheckSquare size={20} />
               </div>
-              Engineering Selection Catalog
+              Engineering Configuration Catalog
             </h2>
-            <div className="mt-4 flex items-center gap-4">
-              <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
-                <div className={`h-full transition-all duration-700 ${validation.isValid ? 'bg-emerald-500' : 'bg-amber-500'}`} style={{ width: `${validation.progress}%` }}></div>
+            <div className="mt-4 flex items-center gap-6">
+              <div className="flex-1 flex items-center gap-4">
+                <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
+                  <div className={`h-full transition-all duration-700 ${validation.isValid ? 'bg-emerald-500' : 'bg-amber-500'}`} style={{ width: `${validation.progress}%` }}></div>
+                </div>
+                <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 whitespace-nowrap">
+                  {validation.progress}% Validation
+                </span>
               </div>
-              <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-                {validation.progress}% Build Validated
-              </span>
+              <div className="flex gap-4">
+                <div className="flex items-center gap-1.5 px-2 bg-amber-50 text-amber-600 rounded-md text-[8px] font-black uppercase border border-amber-200 shadow-sm">
+                  <Star size={10} fill="currentColor" /> Priority 1: MO Engine
+                </div>
+                <div className="flex items-center gap-1.5 px-2 bg-slate-100 text-slate-500 rounded-md text-[8px] font-black uppercase border border-slate-200 shadow-sm">
+                  <Award size={10} /> Priority 2: Logic
+                </div>
+              </div>
             </div>
           </div>
           
           <div className="flex items-center gap-3">
             <button 
               onClick={handleApplyAllSuggestions}
-              className="flex items-center gap-2 px-5 py-2.5 bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all shadow-sm"
+              className="flex items-center gap-2 px-5 py-2.5 bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all active:scale-95 shadow-sm"
             >
-              <Zap size={14} className="fill-indigo-600" /> Apply Hits (P1 & P2)
+              <Zap size={14} className="fill-indigo-600" /> Apply P1 & P2 Hits
             </button>
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-300" size={16} />
@@ -208,32 +218,33 @@ const SelectionScreen: React.FC<Props> = ({ parts, rules, selectedIds, moSelecte
               disabled={!validation.isValid} 
               className={`px-6 py-2.5 rounded-xl flex items-center gap-2 font-black transition-all text-[10px] uppercase tracking-widest shadow-lg ${validation.isValid ? 'bg-indigo-600 hover:bg-indigo-700 text-white' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}
             >
-              <ShieldCheck size={16} /> Generate BOM
+              <ShieldCheck size={16} /> Export BOM
             </button>
           </div>
         </div>
       </div>
 
       {!validation.isValid && (
-        <div className="bg-amber-50 border-b border-amber-100 px-8 py-2 flex items-center gap-3 text-amber-700 text-[10px] font-black uppercase tracking-widest">
+        <div className="bg-amber-50 border-b border-amber-100 px-8 py-3 flex items-center gap-3 text-amber-700 text-[10px] font-black uppercase tracking-widest">
           <AlertCircle size={14} className="text-amber-500" />
-          Missing F2 Selections: <span className="font-mono">{validation.missingGroupNames.join(', ')}</span>
+          Required selections missing in: <span className="text-amber-600 italic font-mono">{validation.missingGroups.slice(0, 3).join(', ')}{validation.missingGroups.length > 3 ? ` (+${validation.missingGroups.length - 3} more)` : ''}</span>
         </div>
       )}
 
-      <div className="flex-1 overflow-auto p-8 space-y-6 max-w-[1400px] mx-auto w-full pb-32">
-        <div className="flex items-center gap-3 text-[10px] font-black text-emerald-600 uppercase tracking-widest mb-2">
-          <PackageCheck size={14} /> F0 Mandatory parts automatically included in final manifest
-        </div>
-        
-        {groupedParts.map(([group, items]) => {
+      <div className="flex-1 overflow-auto p-6 md:p-8 space-y-8 max-w-[1400px] mx-auto w-full pb-32">
+        {groupedParts.length === 0 ? (
+          <div className="h-full flex flex-col items-center justify-center text-slate-200 gap-4 opacity-40">
+            <Search size={64} />
+            <p className="text-xs font-black uppercase tracking-[0.4em]">No matching configuration groups</p>
+          </div>
+        ) : groupedParts.map(([group, items]) => {
           const isExpanded = expandedGroups.has(group) || searchTerm.length > 0;
           const userHasPick = items.some(p => selectedIds.has(p.id));
           const moHasPick = items.some(p => moSelectedIds.has(p.id));
           const fcode = items[0].F_Code;
 
           return (
-            <div key={group} className={`border rounded-[2rem] overflow-hidden transition-all bg-white shadow-sm ${
+            <div key={group} className={`border rounded-[2.5rem] overflow-hidden transition-all bg-white shadow-sm ${
               userHasPick ? 'border-indigo-500 ring-4 ring-indigo-500/5' : 
               moHasPick ? 'border-amber-400 ring-4 ring-amber-400/5' : 
               'border-slate-100'
@@ -242,17 +253,17 @@ const SelectionScreen: React.FC<Props> = ({ parts, rules, selectedIds, moSelecte
                 const n = new Set(expandedGroups);
                 if (n.has(group)) n.delete(group); else n.add(group);
                 setExpandedGroups(n);
-              }} className="w-full px-8 py-5 flex items-center justify-between hover:bg-slate-50/50">
+              }} className="w-full px-8 py-6 flex items-center justify-between hover:bg-slate-50/50">
                 <div className="flex items-center gap-8">
-                  <div className={`p-4 rounded-xl ${userHasPick ? 'bg-indigo-600 text-white shadow-lg' : moHasPick ? 'bg-amber-500 text-white shadow-lg' : 'bg-slate-100 text-slate-400'}`}>
+                  <div className={`p-4 rounded-2xl ${userHasPick ? 'bg-indigo-600 text-white shadow-lg' : moHasPick ? 'bg-amber-500 text-white shadow-lg' : 'bg-slate-100 text-slate-400'}`}>
                     <Hash size={24} />
                   </div>
                   <div className="text-left space-y-1">
                     <div className="flex items-center gap-3">
-                       <span className={`px-2 py-0.5 rounded text-[8px] font-black border uppercase tracking-widest ${
+                       <span className={`px-2 py-0.5 rounded-[6px] text-[8px] font-black border uppercase tracking-widest ${
                          fcode === 2 ? 'bg-red-50 text-red-700 border-red-100' : 'bg-slate-50 text-slate-600 border-slate-200'
                        }`}>
-                         {fcode === 2 ? 'F2: Mandatory Selection' : fcode === 1 ? 'F1: Optional Selection' : 'F9: Information Only'}
+                         {fcode === 2 ? 'F2: Mandatory Single' : fcode === 1 ? 'F1: Optional Multi' : 'F9: Reference'}
                        </span>
                        <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest">{group}</h3>
                     </div>
@@ -273,7 +284,7 @@ const SelectionScreen: React.FC<Props> = ({ parts, rules, selectedIds, moSelecte
                       <button 
                         key={part.id} 
                         onClick={() => toggleSelection(part)} 
-                        className={`flex flex-col text-left p-6 rounded-[2rem] border-2 transition-all relative ${
+                        className={`flex flex-col text-left p-6 rounded-[2rem] border-2 transition-all group relative ${
                           isS ? 'border-indigo-600 bg-indigo-50/20 shadow-xl' : 
                           isMO ? 'border-amber-400 bg-amber-50/10' :
                           isLogic ? 'border-slate-200 bg-slate-50/40' : 
@@ -282,7 +293,7 @@ const SelectionScreen: React.FC<Props> = ({ parts, rules, selectedIds, moSelecte
                       >
                         {isMO && (
                           <div className="absolute -top-3 left-6 px-3 py-1 bg-amber-500 text-white rounded-full text-[8px] font-black uppercase shadow-lg flex items-center gap-1">
-                            <Star size={8} fill="currentColor" /> Priority 1: MO Engine
+                            <Star size={8} fill="currentColor" /> Priority 1: MO
                           </div>
                         )}
                         {!isMO && isLogic && (
@@ -300,8 +311,8 @@ const SelectionScreen: React.FC<Props> = ({ parts, rules, selectedIds, moSelecte
                             {isS ? <Check size={12} strokeWidth={4} /> : (isMO || isLogic) ? <Zap size={10} className="text-indigo-300" /> : null}
                           </div>
                         </div>
-                        <p className="text-xs font-black text-slate-800 uppercase tracking-tight mb-2">{part.Name}</p>
-                        <p className="text-[10px] text-slate-400 italic line-clamp-2 leading-relaxed h-8">{part.Remarks}</p>
+                        <p className="text-xs font-black text-slate-800 leading-tight mb-2 uppercase tracking-tight">{part.Name}</p>
+                        <p className="text-[10px] text-slate-400 italic font-medium line-clamp-2 leading-relaxed h-10">{part.Remarks}</p>
                       </button>
                     );
                   })}
